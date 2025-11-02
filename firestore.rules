@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 'papers' 컬렉션 (논문 메타데이터)에 대한 규칙
+    match /papers/{paperId} {
+
+      // [수정] list를 제외한 create, read, delete 규칙
+      allow create: if request.auth != null
+                    && request.resource.data.uploader == request.auth.uid;
+
+      allow read, delete: if request.auth != null
+                          && resource.data.uploader == request.auth.uid;
+    }
+
+    // [신규] 'papers' 컬렉션 전체에 대한 list(목록 조회) 규칙
+    // (향후 목록 페이지를 만들 경우 필요합니다)
+    match /papers {
+        allow list: if request.auth != null;
+    }
+
+    // 'knowledgeChunks' 컬렉션 (RAG 벡터 조각)에 대한 규칙
+    match /knowledgeChunks/{chunkId} {
+      // 클라이언트의 읽기 접근은 허용
+      allow read: if request.auth != null;
+      // 쓰기(write)는 오직 백엔드 함수(IAM)만 허용합니다.
+      allow write: if false;
+    }
+  }
+}

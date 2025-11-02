@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    // "module": "NodeNext"가 아닌 "commonjs"를 사용합니다.
+    "module": "commonjs",
+    "esModuleInterop": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "outDir": "lib",
+    "sourceMap": true,
+    "strict": true,
+    "target": "es2017",
+    "allowSyntheticDefaultImports": true,
+    "moduleResolution": "node"
+  },
+  "compileOnSave": true,
+  "include": [
+    "src"
+  ]
+}
