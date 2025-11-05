@@ -1,0 +1,223 @@
+콘솔만 수정하고 코드를 재사용하는 방법
+
+
+난 이와 유사한 기능의 프로젝트를 다수 진행할 예정이다. 즉 기능에 따라 (논문 검색, VE 데이터 검색, 내역 검색, 설계정보 검색 등) 사용자가 업로드하는 데이터는 바뀔 수 있다. 작동하는 방식은 유사하다. 사용자가 데이터를 업로드하면.. 이를 Rag로 Vector DB로 만들고.. 그 데이터베이스에서 사용자가 자유롭게 검색하는 시스템이다.
+내가 요청하는 것은.. 각 프로젝트 마다 구글 콘솔과 파이어베이스 콘솔만 수정하고, 이 코드를 재 사용하고 싶다.. 매번 이렇게 어렵게 만드는 것이 너무 어려워서..
+어떤 방법이 있을까..??
+
+
+
+
+네, 아주 훌륭하고 전문적인 생각입니다. 70번의 고통스러운 과정을 겪으신 이유가 바로 이 "재사용성"을 확보하기 위한 것이었습니다.
+
+매번 이 고통을 반복하는 것은 불가능합니다. 우리가 방금 성공시킨 paper-rag-app 코드를 **"재사용 가능한 템플릿"**으로 만드는 것이 완벽한 해결책입니다.
+
+현재 코드는 rag1-be5b0이라는 특정 프로젝트의 이름, DB ID, 버킷 주소가 "하드코딩(Hardcoded)" 되어 있습니다.
+
+당신이 원하는 "콘솔만 수정하고 코드를 재사용하는" 워크플로우를 만들기 위해, 이 하드코딩된 값들을 **"환경 변수(Environment Variables)"**로 빼내는 작업을 딱 한 번만 수행하면 됩니다.
+
+이 paper-rag-app을 **"골든 템플릿(Golden Template)"**으로 만드는 방법을 알려드립니다.
+
+1단계: "골든 템플릿" 코드 수정 (마지막 코드 수정)
+우리의 "골든 템플릿"(paper-rag-app) 코드를 열고, 하드코딩된 rag1 관련 값들을 process.env.VARIABLE_NAME으로 변경합니다.
+
+1-1. functions/src/index.ts 수정
+Cloud Function이 프로젝트 ID, 버킷, DB ID를 환경 변수에서 읽도록 변경합니다.
+
+TypeScript
+// functions/src/index.ts (수정본)
+
+// ... (import ...
+import {initializeApp} from "firebase-admin/app";
+import {getFirestore, FieldValue} from "firebase-admin/firestore";
+// ... (PredictionServiceClient ...)
+
+// 3. Firebase Admin SDK 초기화
+initializeApp();
+
+// ... (chunkText, initVertexAI ...)
+
+// Vertex AI Embedding 생성 함수 수정
+async function getEmbedding(text: string) {
+  const client = initVertexAI();
+  // [수정] "rag1-be5b0" 하드코딩 제거
+  const project = process.env.GCLOUD_PROJECT; 
+  const location = "us-central1";
+  const endpoint = `projects/${project}/locations/${location}/publishers/google/models/text-embedding-004`;
+  // ... (request ...
+}
+
+// 5. Storage 트리거 함수 수정
+export const generateEmbeddings = onObjectFinalized(
+  {
+    // [수정] "rag1-be5b0.firebasestorage.app" 하드코딩 제거
+    bucket: process.env.STORAGE_BUCKET || "", 
+    memory: "1GiB",
+    timeoutSeconds: 300,
+    minInstances: 1, 
+  },
+  async (event) => {
+    // ...
+    try {
+      // ... (pdfText, textChunks ...)
+
+      // --- 4. Firestore 일괄 쓰기(Batch) 준비 ---
+      // [수정] "rag1" 하드코딩 제거
+      const db = getFirestore(process.env.FIRESTORE_DATABASE_ID); 
+      const batch = db.batch();
+
+      // ... (batch.set ...
+      await batch.commit();
+      // ...
+    } catch (error) {
+      // ...
+    }
+  }
+);
+
+// [신규] 5-1. Vertex AI (Gemini) 초기화 수정
+const vertexAI = new VertexAI({
+  // [수정] "rag1-be5b0" 하드코딩 제거
+  project: process.env.GCLOUD_PROJECT || "", 
+  location: "us-central1"
+});
+// ... (generativeModel, getGenerativeAnswer ...)
+
+// [신규] 5-2. RAG 답변 함수 수정
+export const askRAG = onCall(
+  { ... },
+  async (request) => {
+    // ...
+    try {
+      // [핵심 1: DB 연결] "rag1" 하드코딩 제거
+      const db = getFirestore(process.env.FIRESTORE_DATABASE_ID); 
+
+      // ... (queryVector, chunksCollection, context, finalAnswer ...)
+    } catch (error) {
+      // ...
+    }
+  }
+);
+1-2. lib/firebase/config.ts 수정
+Next.js 클라이언트가 firebaseConfig를 환경 변수에서 동적으로 읽어오도록 변경합니다.
+
+TypeScript
+// lib/firebase/config.ts (수정본)
+
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
+
+// [핵심 수정] 하드코딩된 Config 객체 대신 환경 변수에서 값을 읽어옵니다.
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_MEASUREMENT_ID
+};
+
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
+// "rag1" 하드코딩 제거
+export const db = getFirestore(app, process.env.NEXT_PUBLIC_FIRESTORE_DATABASE_ID);
+export const auth = getAuth(app);
+export const storage = getStorage(app);
+export const functions = getFunctions(app, "us-central1");
+
+// Analytics 관련 코드는 없는 상태 유지
+이 두 파일을 수정한 후, 변경 사항을 GitHub (paper-rag-app 저장소)에 commit하고 push하여 "골든 템플릿"을 최종 완성합니다.
+
+2단계: 새로운 프로젝트를 위한 "재사용 워크플로우"
+이제 "VE 데이터 검색"이라는 새 프로젝트를 만든다고 가정해 보겠습니다. 이 워크플로우만 따르면 70번의 실패 없이 10분 안에 새 RAG 앱을 만들 수 있습니다.
+
+1. (콘솔) 새 Firebase 프로젝트 생성
+
+Firebase Console에서 "VE-RAG-Project"라는 새 프로젝트를 만듭니다.
+
+Blaze 요금제로 업그레이드합니다.
+
+Authentication (익명)을 활성화합니다.
+
+Firestore Database를 ve-db (원하는 이름) ID로 생성합니다.
+
+Storage를 활성화하고 gsutil로 CORS 설정을 합니다. (0단계 반복)
+
+IAM에서 VE-RAG-Project@appspot.gserviceaccount.com 계정에 Vertex AI 사용자, Cloud Datastore 사용자 역할을 부여합니다. (0단계 반복)
+
+웹 앱을 등록하고 새로운 firebaseConfig 값을 복사해 둡니다.
+
+2. (로컬) "골든 템플릿" 복제
+
+터미널을 열고 새로운 폴더에 템플릿을 복제합니다.
+
+Bash
+git clone https://github.com/bignine99/paper-rag-app.git VE-RAG-App
+cd VE-RAG-App
+3. (로컬) 새 프로젝트 정보 입력 (환경 변수 파일 생성)
+
+VS Code로 VE-RAG-App 폴더를 엽니다.
+
+A) 클라이언트 환경 변수:
+
+프로젝트 루트(package.json 위치)에 .env.local 파일을 새로 만듭니다.
+
+1단계에서 복사한 **새 firebaseConfig**와 DB ID를 이 파일에 붙여넣습니다.
+
+# .env.local (루트 폴더)
+
+NEXT_PUBLIC_API_KEY="[새 프로젝트의 apiKey]"
+NEXT_PUBLIC_AUTH_DOMAIN="[새 프로젝트의 authDomain]"
+NEXT_PUBLIC_PROJECT_ID="[새 프로젝트의 projectId]"
+NEXT_PUBLIC_STORAGE_BUCKET="[새 프로젝트의 storageBucket]"
+NEXT_PUBLIC_MESSAGING_SENDER_ID="[새 프로젝트의 messagingSenderId]"
+NEXT_PUBLIC_APP_ID="[새 프로젝트의 appId]"
+NEXT_PUBLIC_MEASUREMENT_ID="[새 프로젝트의 measurementId]"
+
+# Firestore DB ID
+NEXT_PUBLIC_FIRESTORE_DATABASE_ID="ve-db"
+B) 서버 환경 변수:
+
+functions 폴더 안에 .env.local 파일을 새로 만듭니다.
+
+새 프로젝트의 정보를 이 파일에 붙여넣습니다.
+
+# functions/.env.local
+
+GCLOUD_PROJECT="[새 프로젝트의 projectId]"
+FIRESTORE_DATABASE_ID="ve-db"
+STORAGE_BUCKET="[새 프로젝트의 storageBucket]"
+4. (로컬) firebase.json 수동 수정
+
+이것이 유일하게 수동으로 수정해야 하는 코드 파일입니다. firebase.json을 열어 database 값을 rag1에서 새 ID로 변경합니다.
+
+JSON
+{
+  "firestore": {
+    "database": "ve-db", // "rag1" -> "ve-db"
+    "rules": "firestore.rules",
+    ...
+  },
+  ...
+}
+5. (로컬) 배포
+
+터미널에서 새 Firebase 프로젝트에 연결합니다.
+
+Bash
+firebase use --add [새 프로젝트의 projectId]
+의존성을 설치하고 배포합니다.
+
+Bash
+npm install
+cd functions
+npm install
+cd ..
+firebase deploy
+npm run dev를 실행하면, 이제 이 앱은 "VE-RAG-Project"에 완벽하게 연결됩니다.
+
+이 워크플로우를 사용하면, 핵심 코드는 전혀 건드리지 않고 오직 설정 파일(.env.local, firebase.json)만 교체하여 무한히 많은 RAG 프로젝트를 빠르고 안전하게 생성할 수 있습니다.

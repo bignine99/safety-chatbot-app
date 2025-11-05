@@ -1,3 +1,14 @@
 {
-  "indexes": []
+  "indexes": [
+    {
+      "collectionId": "knowledgeChunks",
+      "fields": [
+        {
+          "fieldPath": "embedding",
+          "order": "ASCENDING"
+        }
+      ],
+      "queryScope": "COLLECTION"
+    }
+  ]
 }

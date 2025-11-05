@@ -1,126 +1,235 @@
-// functions/src/index.ts
+// functions/src/index.ts (최종 수정본 v2 - 라이브러리 충돌 해결)
 
-// 1. 초기화 및 라이브러리 임포트
+import { initializeApp } from "firebase-admin/app";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
+import { onObjectFinalized } from "firebase-functions/v2/storage";
+import { onCall } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
-import {onObjectFinalized} from "firebase-functions/v2/storage";
-import {initializeApp} from "firebase-admin/app";
-import {getFirestore, FieldValue} from "firebase-admin/firestore";
-import {getStorage} from "firebase-admin/storage";
 
-// 2. Vertex AI(Embedding) 가져오기
-import {PredictionServiceClient} from "@google-cloud/aiplatform";
-
-// [최종 수정] pdf-parse@1.1.1 버전과 100% 호환되는 "require" 방식 사용
-// (이 코드가 'pdf is not a function' 오류를 해결합니다.)
+// PDF 파싱 라이브러리
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const pdf = require("pdf-parse");
+import pdf from "pdf-parse";
 
-// 3. Firebase Admin SDK 초기화
+// [핵심 수정] 신형 @google-cloud/vertexai 라이브러리만 사용합니다.
+import {
+  VertexAI,
+  HarmCategory,
+  HarmBlockThreshold,
+} from "@google-cloud/vertexai";
+// [핵심 수정] 구형 @google-cloud/aiplatform 라이브러리 임포트 제거
+
+// 1. Firebase Admin SDK 초기화
 initializeApp();
 
-/** PDF 텍스트를 의미 있는 단위(Chunk)로 분할하는 함수 */
-function chunkText(text: string, chunkSize = 2000): string[] {
+// 2. 텍스트 분할 (Chunking) 헬퍼 함수
+function chunkText(
+  text: string,
+  chunkSize = 1000,
+  overlap = 100
+): string[] {
   const chunks: string[] = [];
   let i = 0;
   while (i < text.length) {
-    chunks.push(text.substring(i, i + chunkSize));
-    i += chunkSize;
+    const end = Math.min(i + chunkSize, text.length);
+    chunks.push(text.substring(i, end));
+    i += chunkSize - overlap;
+    if (end === text.length) break;
   }
   return chunks;
 }
 
-// Vertex AI Embedding 생성 함수 (0단계 IAM 권한과 연결됨)
-function initVertexAI() {
-  const location = "us-central1";
-  const clientOptions = { apiEndpoint: `${location}-aiplatform.googleapis.com` };
-  return new PredictionServiceClient(clientOptions);
-}
-async function getEmbedding(text: string) {
-  const client = initVertexAI();
-  const project = "rag1-be5b0";
-  const location = "us-central1";
-  const endpoint = `projects/${project}/locations/${location}/publishers/google/models/text-embedding-004`;
-  const instances = [{content: text}];
-  const request = {
-    endpoint: endpoint,
-    instances: instances.map((instance) => ({
-        structValue: { fields: { content: { stringValue: instance.content } } }
-    })),
-  };
+// --- 3. [수정] 신형 Vertex AI SDK 초기화 ---
+const vertexAI = new VertexAI({
+  project: process.env.GCLOUD_PROJECT || "",
+  location: "us-central1",
+});
+
+// Gemini 답변용 모델
+const generativeModel = vertexAI.getGenerativeModel({
+  model: "gemini-1.5-flash-001",
+  safetySettings: [
+    {
+      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+  ],
+});
+
+// 임베딩(벡터화)용 모델
+const embeddingModel = vertexAI.getGenerativeModel({
+  model: "text-embedding-004",
+});
+// --- 초기화 종료 ---
+
+// 4. Vertex AI Embedding 생성 함수 (신형 SDK로 수정)
+async function getEmbedding(text: string): Promise<number[]> {
   try {
-    const [response] = await client.predict(request);
-    const values = response.predictions?.[0]?.structValue?.fields?.embeddings?.structValue?.fields?.values?.listValue?.values;
-    if (values) {
-      return values.map((v: any) => v.numberValue || 0);
+    const result = await embeddingModel.embedContent(text);
+    const embedding = result.embedding;
+    if (!embedding || !embedding.values) {
+      throw new Error("Invalid Vertex AI Embedding response structure (v2)");
     }
-    throw new Error("Invalid embedding response structure");
+    return embedding.values;
   } catch (error) {
-    logger.error("Error getting embedding:", error);
-    // 이 오류는 0-2단계 IAM 권한 부족 시 발생합니다.
-    throw error;
+    logger.error("Error getting embedding (v2):", error);
+    throw new Error("Failed to get embedding from Vertex AI (v2).");
   }
 }
 
-// 5. [핵심] Storage에 파일이 업로드되면 실행될 메인 함수
+// 5. Storage에 파일이 업로드되면 실행될 메인 함수 (벡터화)
 export const generateEmbeddings = onObjectFinalized(
   {
-    bucket: "rag1-be5b0.firebasestorage.app", // 0단계에서 확인한 버킷 주소
+    bucket: process.env.STORAGE_BUCKET || "",
     memory: "1GiB",
     timeoutSeconds: 300,
+    minInstances: 1,
   },
   async (event) => {
-    logger.info("RAG Pipeline Started:", event.data.name);
-
-    const filePath = event.data.name; // 예: papers/yAH3uRmcpJZ9UubmJ7jWwROIPfj1/파일명.pdf
-    if (!filePath || !filePath.startsWith("papers/") || !event.data.bucket) {
-      logger.info("Not a knowledge file, skipping.");
-      return null;
+    const { bucket, name: filePath } = event.data;
+    if (!filePath || !filePath.endsWith(".pdf")) {
+      logger.info(`Not a PDF file, skipping: ${filePath}`);
+      return;
     }
-
-    const fileBucket = getStorage().bucket(event.data.bucket);
-    const file = fileBucket.file(filePath);
-    const fileBuffer = (await file.download())[0];
+    logger.info(`Processing file: ${filePath}`);
 
     try {
-      // --- 2. PDF 파싱 (v1.1.1 버전은 Buffer를 직접 함수에 전달하면 됨)
-      const pdfData = await pdf(fileBuffer);
-      const pdfText = pdfData.text;
-      logger.info(`PDF Parsed: ${pdfText.length} characters.`);
+      // --- 1. Storage에서 PDF 파일 다운로드 ---
+      const file = getStorage().bucket(bucket).file(filePath);
+      const [fileBuffer] = await file.download();
 
-      // --- 3. 텍스트 분할 (Text -> Chunks)
-      const textChunks = chunkText(pdfText);
-      logger.info(`Text Chunked: ${textChunks.length} chunks.`);
+      // --- 2. PDF 텍스트 추출 ---
+      const data = await pdf(fileBuffer);
+      const pdfText = data.text;
+      if (!pdfText) {
+        logger.warn("PDF text content is empty.");
+        return;
+      }
+      logger.info(`PDF text extracted. Length: ${pdfText.length}`);
+
+      // --- 3. 텍스트 분할 (Chunking) ---
+      const textChunks = chunkText(pdfText, 1000, 100);
+      logger.info(`Text chunked into ${textChunks.length} pieces.`);
 
       // --- 4. Firestore 일괄 쓰기(Batch) 준비 ---
-      // [!!! 핵심 수정 !!!] (default)가 아닌 "rag1" 데이터베이스를 명시적으로 지정합니다.
-      const db = getFirestore("rag1");
+      const db = getFirestore(process.env.FIRESTORE_DATABASE_ID!);
       const batch = db.batch();
+      let vectorCount = 0;
 
-      // --- 5. 각 조각(Chunk)을 벡터화하고 Batch에 추가 ---
-      for (let i = 0; i < textChunks.length; i++) {
-        const chunk = textChunks[i];
-
+      for (const chunk of textChunks) {
+        // --- 5. 각 Chunk를 벡터로 변환 ---
         const embedding = await getEmbedding(chunk);
+        vectorCount++;
 
+        // --- 6. Batch에 쓰기 작업 추가 ---
         const docRef = db.collection("knowledgeChunks").doc();
         batch.set(docRef, {
           originalFilePath: filePath,
-          chunkNumber: i,
           text: chunk,
-          embedding: embedding, // 벡터 필드
+          embedding: embedding,
           createdAt: FieldValue.serverTimestamp(),
         });
       }
 
-      // --- 6. Batch 쓰기 실행 (DB에 저장) ---
+      // --- 7. Firestore에 일괄 커밋 ---
       await batch.commit();
-      logger.info("Successfully created embeddings and saved to Firestore.");
-
-      return null;
-
+      logger.info(
+        `Successfully created ${vectorCount} embeddings and saved to Firestore.`
+      );
     } catch (error) {
-      logger.error("Error in RAG pipeline:", error);
-      return null;
+      logger.error("Error in generateEmbeddings pipeline:", error);
+    }
+  }
+);
+
+// 6-1. Gemini 답변 생성 헬퍼 함수
+async function getGenerativeAnswer(
+  context: string,
+  question: string
+): Promise<string> {
+  const prompt = `
+    당신은 "논문 분석 RAG 봇"입니다.
+    주어진 "컨텍스트" 정보만을 기반으로 사용자의 "질문"에 대해 답변해야 합니다.
+    컨텍스트에 답변이 없으면 "제공된 정보만으로는 답변할 수 없습니다."라고 응답하십시오.
+    추측하거나 외부 지식을 사용하지 마십시오.
+
+    ---
+    [컨텍스트]
+    ${context}
+    ---
+    [질문]
+    ${question}
+    ---
+    [답변]
+  `;
+
+  try {
+    const result = await generativeModel.generateContent(prompt);
+    const response = result.response;
+    return response.text();
+  } catch (error) {
+    logger.error("Error getting generative answer:", error);
+    throw new Error("Gemini 모델 호출에 실패했습니다.");
+  }
+}
+
+// 6-2. 클라이언트가 호출할 메인 RAG 함수
+export const askRAG = onCall(
+  {
+    memory: "1GiB",
+    timeoutSeconds: 60,
+    region: "us-central1",
+    minInstances: 1,
+  },
+  async (request) => {
+    const question = request.data.question;
+    if (typeof question !== "string" || question.trim().length === 0) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "질문(question)이 필요합니다."
+      );
+    }
+
+    logger.info(`Received question: ${question}`);
+
+    try {
+      const db = getFirestore(process.env.FIRESTORE_DATABASE_ID!);
+      const queryVector = await getEmbedding(question);
+      logger.info("Question vectorized.");
+
+      const chunksCollection = db.collection("knowledgeChunks");
+      const snapshot = await chunksCollection.findNearest(
+        "embedding",
+        queryVector,
+        {
+          limit: 5,
+          distanceMeasure: "DOT_PRODUCT",
+        }
+      );
+
+      if (snapshot.empty) {
+        logger.warn("No relevant chunks found.");
+        return { answer: "관련된 정보를 찾을 수 없습니다." };
+      }
+
+      const context = snapshot.docs
+        .map((doc: any) => doc.data().text)
+        .join("\n\n");
+      logger.info(`Context retrieved: ${context.substring(0, 100)}...`);
+
+      const finalAnswer = await getGenerativeAnswer(context, question);
+      logger.info(`Answer generated: ${finalAnswer.substring(0, 50)}...`);
+
+      return { answer: finalAnswer };
+    } catch (error) {
+      logger.error("Error in askRAG pipeline:", error);
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      throw new functions.https.HttpsError(
+        "internal",
+        "RAG 파이프라인 처리 중 오류가 발생했습니다."
+      );
     }
   }
 );
