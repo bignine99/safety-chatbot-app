@@ -717,7 +717,7 @@ Firebase가 리포지토리를 분석한 후, next.config.mjs 파일을 감지�
 이 URL에 접속하여 관리자 페이지가 정상적으로 로드되는지, 그리고 파일 업로드와 RAG 질문하기 기능이 모두 정상적으로 작동하는지 최종 테스트합니다.
 
 
-7단계: Next.js 프론트엔드 프로덕션 배포 (Firebase Hosting)
+8단계: Next.js 프론트엔드 프로덕션 배포 (Firebase Hosting)
 목표: localhost:3000에서만 접근 가능했던 관리자 페이지(app/admin/page.tsx)를 실제 인터넷 URL(예: https://[프로젝트명].web.app)에 배포하여 어디서든 접근하고 사용할 수 있게 합니다.
 
 구현: Next.js App Router(동적 서버 렌더링)와 가장 잘 통합되는 Firebase App Hosting을 사용하여 배포합니다.
@@ -747,7 +747,194 @@ Firebase가 리포지토리를 분석한 후, next.config.mjs 파일을 감지�
 이 URL에 접속하여 관리자 페이지가 정상적으로 로드되는지, 그리고 파일 업로드와 RAG 질문하기 기능이 모두 정상적으로 작동하는지 최종 테스트합니다.
 
 
+===========================================
 
+"안전 챗봇" 프로젝트를 위한 '재사용 워크플로우' 시작하기
+이 문서는 paper-rag-app (Next.js + Genkit 통합 템플릿)을 사용하여 "안전 챗봇" 같은 신규 프로젝트를 10분 안에 시작하는 상세 절차를 기술합니다.
+
+1단계: (콘솔) Firebase 및 Google Cloud 백엔드 준비
+새 프로젝트를 위한 인프라를 생성합니다. 코딩 전에 이 단계가 완벽하게 끝나야 합니다.
+
+Firebase 프로젝트 생성:
+
+Firebase Console에서 "Safety-Chatbot-Project"(예시)라는 새 프로젝트를 만듭니다.
+
+즉시 Blaze(종량제) 요금제로 업그레이드합니다. (Vertex AI 사용에 필수)
+
+Firebase 서비스 활성화:
+
+Authentication: 시작하기 -> 로그인 제공업체에서 익명 로그인을 활성화합니다.
+
+Firestore Database: 데이터베이스 만들기 -> 프로덕션 모드로 (default) 데이터베이스를 생성합니다.
+
+Storage: 시작하기를 눌러 기본 버킷을 활성화합니다.
+
+Storage CORS 설정 (필수):
+
+로컬 개발 환경(localhost:3000)에서 Storage로 파일을 업로드하기 위해 CORS 설정이 필수입니다.
+
+로컬 컴퓨터에 cors.json 파일을 (임시로) 생성합니다.
+
+JSON
+
+[
+  {
+    "origin": ["http://localhost:3000"],
+    "method": ["GET", "POST", "PUT", "DELETE", "HEAD"],
+    "responseHeader": ["Content-Type", "Access-Control-Allow-Origin"],
+    "maxAgeSeconds": 3600
+  }
+]
+Google Cloud SDK가 설치된 로컬 터미널(CMD 또는 PowerShell)에서 다음 명령어를 실행하여 정책을 적용합니다. (버킷 주소는 Firebase Storage에서 확인)
+
+Bash
+
+gsutil cors set cors.json gs://safety-chatbot-project.firebasestorage.app
+Google Cloud IAM 및 API 설정:
+
+Google Cloud Console로 이동하여 Safety-Chatbot-Project가 선택되었는지 확인합니다.
+
+API 활성화: API 및 서비스 > 라이브러리에서 **Vertex AI API**를 검색하여 사용 설정합니다.
+
+IAM 역할 부여: IAM 및 관리자 > IAM으로 이동합니다.
+
+App Engine default service account (또는 ...@appspot.gserviceaccount.com으로 끝나는) 계정을 찾아 수정을 누릅니다.
+
++ 다른 역할 추가를 눌러 다음 3가지 역할을 추가하고 저장합니다.
+
+Vertex AI 사용자 (AI 모델 호출 권한)
+
+Cloud Datastore 사용자 (Firestore 읽기/쓰기 권한)
+
+Storage 객체 관리자 (Storage 파일 읽기/쓰기 권한)
+
+웹 앱 등록:
+
+Firebase Console 프로젝트 설정 > 내 앱에서 **</> (웹 앱)**을 등록합니다.
+
+SDK 설정 및 구성에서 표시되는 firebaseConfig 객체 정보를 복사해 둡니다. (다음 단계에서 사용)
+
+2단계: (로컬) "골든 템플릿" 복제 및 기본 설정
+이제 로컬 컴퓨터에서 코드를 준비합니다.
+
+템플릿 복제(Clone):
+
+05 Code 등 원하는 상위 폴더에서 터미널을 엽니다.
+
+git clone 명령어로 템플릿을 새 프로젝트 이름(Safety-Chatbot-App)으로 복제합니다.
+
+Bash
+
+git clone https://github.com/bignine99/paper-rag-app.git Safety-Chatbot-App
+폴더 이동 및 코드 열기:
+
+방금 생성된 폴더로 이동합니다.
+
+Bash
+
+cd Safety-Chatbot-App
+VS Code로 이 폴더를 엽니다.
+
+Bash
+
+code .
+의존성 설치:
+
+VS Code 내의 터미널을 열고 (Ctrl+``) npm install`을 실행하여 모든 패키지를 설치합니다.
+
+Bash
+
+npm install
+(중요) 이 템플릿은 genkit CLI가 package.json에 빠져있을 수 있습니다. 만일을 대비해 수동으로 설치합니다.
+
+Bash
+
+npm install genkit
+3단계: (로컬) 핵심 인증 설정 (.env.local 및 service-account.json)
+이 단계는 Next.js 서버(Genkit)가 Google Cloud에 인증하기 위한 가장 중요한 단계입니다.
+
+service-account-key.json 생성:
+
+Google Cloud Console > IAM 및 관리자 > 서비스 계정으로 이동합니다.
+
+(선택) + 서비스 계정 만들기를 눌러 이 앱 전용 계정(예: safety-chatbot-server)을 만들고, 1단계-4항에서 부여한 3가지 역할(Vertex AI, Datastore, Storage)을 동일하게 부여합니다.
+
+(권장) 방금 만든 safety-chatbot-server 계정을 클릭 -> 키 탭 -> 키 추가 -> 새 키 만들기 -> JSON 선택 후 만들기를 누릅니다.
+
+...json 파일이 다운로드됩니다.
+
+비밀 키 배치:
+
+다운로드한 JSON 파일의 이름을 **service-account-key.json**으로 변경합니다.
+
+이 파일을 Safety-Chatbot-App 프로젝트 최상위 루트 (VS Code 탐색기 맨 위, package.json과 같은 위치)에 복사해 넣습니다.
+
+.env.local 파일 생성:
+
+프로젝트 최상위 루트에 **.env.local**이라는 새 파일을 생성합니다.
+
+아래 내용을 모두 복사하여 붙여넣습니다.
+
+[... ]로 표시된 부분을 1단계-5항에서 복사한 firebaseConfig 값과 방금 설정한 값으로 정확하게 채워 넣습니다.
+
+코드 스니펫
+
+# .env.local
+
+# 1. 클라이언트용 (Public) 환경 변수 - (1단계-5항의 firebaseConfig 값)
+NEXT_PUBLIC_FIREBASE_API_KEY="[AIzaSy...]"
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="[safety-chatbot-project.firebaseapp.com]"
+NEXT_PUBLIC_FIREBASE_PROJECT_ID="[safety-chatbot-project]"
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET="[safety-chatbot-project.firebasestorage.app]"
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="[712...]"
+NEXT_PUBLIC_FIREBASE_APP_ID="[1:712...]"
+NEXT_PUBLIC_MEASUREMENT_ID="[G-...]"
+
+# 2. 서버/Genkit용 (Secret) 환경 변수
+GCLOUD_PROJECT="[safety-chatbot-project]"
+VERTEX_LOCATION="us-central1"
+
+# 3. (필수) 서버 인증을 위한 서비스 계정 키 파일 경로
+# 2단계에서 생성한 JSON 파일의 경로를 지정합니다.
+GOOGLE_APPLICATION_CREDENTIALS="./service-account-key.json"
+보안 설정 (.gitignore):
+
+.gitignore 파일을 엽니다.
+
+파일 맨 아래에 다음 두 줄이 반드시 포함되어 있는지 확인하여, 비밀 키가 GitHub에 유출되지 않도록 합니다.
+
+코드 스니펫
+
+# 로컬 환경 변수 파일
+.env.local
+
+# Google Cloud 서비스 계정 키
+*.json
+4단계: (로컬) 개발 서버 실행 및 개발 시작
+이제 모든 설정이 완료되었습니다.
+
+개발 서버 시작:
+
+VS Code 터미널에서 다음 명령어를 실행합니다.
+
+Bash
+
+npm run dev
+이 명령어 하나가 Next.js 웹서버와 Genkit AI 백엔드를 동시에 실행합니다. (별도의 genkit start는 필요 없습니다.)
+
+웹 앱 확인:
+
+브라우저에서 **http://localhost:3000**으로 접속합니다.
+
+Next.js 기본 템플릿 화면("To get started, edit the page.tsx file.")이 보이면 성공입니다.
+
+(localhost:4000이나 /api/genkit 같은 별도의 Genkit UI는 이 템플릿에 존재하지 않습니다.)
+
+개발 시작:
+
+이제 src/app/page.tsx 파일을 엽니다.
+
+기존 템플릿 코드를 모두 지우고, "안전 챗봇"을 위한 UI(파일 업로드 버튼, 채팅창) 개발을 시작합니다.
 
 
 

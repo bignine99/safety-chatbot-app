@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 로컬 환경 변수 파일
+.env.local
+
+# Google Cloud 서비스 계정 키
+*.json

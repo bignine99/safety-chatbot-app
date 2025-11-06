@@ -117,7 +117,90 @@ AI(나)는 이 현상을 "유령 캐시" 또는 "모듈 충돌"로 **완전히 �
 * **해결책은 `v8` 코드에 있다.** 원본 KB의 아키텍처(`aiplatform` + `vertexai` 분리, `commonjs` 사용)를 존중하고, 그 위에 명백한 구문 오류 3가지를 수정한 **`v8` 코드**가 최종 해결책이었습니다.
 
 
+===============================================
 
+2025-11-06: genkit 명령어 실행 오류 및 프로젝트 구조 진단
+Next.js 통합 템플릿(paper-rag-app)을 클론한 후, AI 서버(Genkit)를 실행하는 과정에서 심각한 혼란과 일련의 명령어 오류가 발생했다. 이 기록은 해당 오류의 원인을 진단하고 올바른 프로젝트 실행 방식을 찾는 과정을 상세히 기술한다.
+
+1. 초기 증상: genkit 명령어 실행 불가
+프로젝트 클론(git clone) 및 패키지 설치(npm install) 후, AI 개발자 UI를 실행하기 위해 genkit start 관련 명령어를 시도했으나 모두 실패했다.
+
+시도 1: genkit start
+
+오류: 'genkit'은(는) 내부 또는 외부 명령, 실행할 수 있는 프로그램, 또는 배치 파일이 아닙니다.
+
+분석: genkit CLI가 시스템 전역(Path)에 설치되어 있지 않음.
+
+시도 2: npx genkit start
+
+오류: npm error could not determine executable to run
+
+분석: npx가 프로젝트 내부(node_modules)에서도 genkit 실행 파일을 찾지 못함.
+
+시도 3: npm run g:start
+
+오류: npm error Missing script: "g:start"
+
+분석: package.json에 g:start라는 스크립트가 정의되어 있지 않음 (잘못된 추측).
+
+2. 1차 진단: genkit CLI 패키지 누락
+npx가 실행 파일을 찾지 못하는 문제를 해결하기 위해, node_modules 내부를 직접 확인했다.
+
+조사: dir .\node_modules\.bin\
+
+결과: genkit 또는 genkit.cmd 실행 파일이 목록에 존재하지 않음을 확인.
+
+조치: genkit CLI가 dependencies가 아닌 devDependencies에 필요하다고 판단, 수동으로 설치를 시도했다.
+
+Bash
+
+npm install genkit
+결과: 설치는 성공했으나, 이후 npx genkit start 및 .\node_modules\.bin\genkit start 명령어가 여전히 동일한 오류를 발생시켰다. dir 목록에서도 genkit.cmd는 발견되지 않았다.
+
+3. 2차 진단: Next.js 실행 방식과의 충돌
+genkit 명령어에 대한 집착을 버리고, package.json의 표준 스크립트를 테스트했다.
+
+시도 1: npm start
+
+결과: next start가 실행되었으나, Error: Could not find a production build in the '.next' directory. 오류 발생.
+
+분석: npm start는 "프로덕션(배포) 서버"를 실행하는 명령어이며, npm run build가 선행되어야 한다. 우리가 원하는 "개발 모드"가 아님.
+
+시도 2: npm run dev
+
+결과: 성공. Next.js 개발 서버가 http://localhost:3000에서 정상적으로 시작됨.
+
+4. 최종 원인 분석 및 해결: "통합 Next.js" 아키텍처
+npm run dev가 성공했음에도 불구하고, http://localhost:4000 (Genkit UI 기본 주소) 접속이 실패(ERR_CONNECTION_REFUSED)했다. 이로 인해 이 템플릿의 아키텍처를 근본적으로 파악할 수 있었다.
+
+잘못된 가정: 이 프로젝트는 genkit start(AI 서버)와 npm run dev(웹 서버)를 별도로 실행하는 2-서버 구조일 것이라고 잘못 가정했다.
+
+진짜 구조: 이 템플릿은 genkit CLI를 전혀 사용하지 않는다. 대신, Genkit(AI SDK)이 Next.js 앱 내부에 라이브러리로 포함되어 npm run dev 명령어 하나로 웹 서버와 AI 백엔드 로직이 동시에 실행되는 "통합 서버" 아키텍처이다.
+
+결론:
+
+genkit.cmd 파일이 없었던 것은 오류가 아니라 의도된 설계였다.
+
+localhost:4000 접속 실패는 당연한 결과였다. AI 서버는 3000번 포트에서 Next.js와 함께 실행 중이다.
+
+localhost:3000/genkit 또는 /api/genkit의 404 오류는, 이 템플릿이 Genkit의 개발자 UI를 포함하지 않고, 순수 API 백엔드로만 작동한다는 것을 의미한다.
+
+5. 교훈 및 표준 절차 확립
+교훈: 이 템플릿(paper-rag-app)은 별도의 genkit start 명령어가 필요 없다. 모든 것은 npm run dev 하나로 시작된다.
+
+표준 절차:
+
+git clone ...
+
+npm install
+
+(필요시) npm install genkit (라이브러리로서의 genkit 설치)
+
+.env.local 및 service-account-key.json 설정
+
+npm run dev 실행
+
+http://localhost:3000에 접속하여 src/app/page.tsx 파일 수정을 통해 프론트엔드 개발을 시작한다. AI 백엔드는 이미 백그라운드에서 실행 대기 중이다.
 
 
 
