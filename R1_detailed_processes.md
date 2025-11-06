@@ -680,6 +680,9 @@ cd ..
 Bash
 
 firebase deploy --only functions --force
+
+============================
+
 7단계: Next.js 프론트엔드 프로덕션 배포 (Firebase Hosting)
 목표: localhost:3000에서만 접근 가능했던 관리자 페이지(app/admin/page.tsx)를 실제 인터넷 URL(예: https://[프로젝트명].web.app)에 배포하여 어디서든 접근하고 사용할 수 있게 합니다.
 
@@ -714,7 +717,34 @@ Firebase가 리포지토리를 분석한 후, next.config.mjs 파일을 감지�
 이 URL에 접속하여 관리자 페이지가 정상적으로 로드되는지, 그리고 파일 업로드와 RAG 질문하기 기능이 모두 정상적으로 작동하는지 최종 테스트합니다.
 
 
+7단계: Next.js 프론트엔드 프로덕션 배포 (Firebase Hosting)
+목표: localhost:3000에서만 접근 가능했던 관리자 페이지(app/admin/page.tsx)를 실제 인터넷 URL(예: https://[프로젝트명].web.app)에 배포하여 어디서든 접근하고 사용할 수 있게 합니다.
 
+구현: Next.js App Router(동적 서버 렌더링)와 가장 잘 통합되는 Firebase App Hosting을 사용하여 배포합니다.
+
+1. GitHub 리포지토리 준비
+현재 로컬 컴퓨터에 있는 이 "골든 템플릿" 프로젝트(paper-rag-app) 전체를 GitHub 리포지토리에 push합니다. (App Hosting은 GitHub 연동을 통해 CI/CD를 자동화합니다.)
+
+2. Firebase App Hosting 설정
+Firebase Console로 이동합니다.
+
+왼쪽 메뉴에서 빌드(Build) > Hosting을 클릭합니다.
+
+"App Hosting" (파란색 아이콘의 새 버전)을 선택하고 시작하기를 누릅니다. (기존 "웹 호스팅"이 아닙니다.)
+
+"GitHub로 계속"을 선택하고, 1단계에서 준비한 리포지토리를 Firebase가 접근할 수 있도록 승인하고 연결합니다.
+
+3. 배포 설정 및 자동 배포
+Firebase가 리포지토리를 분석한 후, next.config.mjs 파일을 감지하고 "Next.js 앱"임을 자동으로 인식합니다.
+
+배포 리전(예: us-central1)을 선택하고 "배포"를 클릭합니다.
+
+이 과정을 통해 GitHub Actions가 리포지토리에 자동으로 설정되며, 코드가 main 브랜치에 push될 때마다 앱이 자동으로 빌드 및 배포됩니다.
+
+4. 최종 테스트
+배포가 완료되면(몇 분 정도 소요될 수 있습니다), Firebase 콘솔에 https://[YOUR_PROJECT_ID].web.app (또는 유사한) 형태의 라이브 URL이 표시됩니다.
+
+이 URL에 접속하여 관리자 페이지가 정상적으로 로드되는지, 그리고 파일 업로드와 RAG 질문하기 기능이 모두 정상적으로 작동하는지 최종 테스트합니다.
 
 
 

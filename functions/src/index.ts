@@ -1,23 +1,29 @@
-// functions/src/index.ts (최종 수정본 v2 - 라이브러리 충돌 해결)
+// functions/src/index.ts (최종 v8 - 원본 아키텍처 복원 및 모든 버그 수정)
 
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { onObjectFinalized } from "firebase-functions/v2/storage";
-import { onCall } from "firebase-functions/v2/https";
+import { onCall, HttpsError } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 
-// PDF 파싱 라이브러리
+// [핵심] commonjs 방식을 위해 require 사용
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-import pdf from "pdf-parse";
+const pdf = require("pdf-parse");
 
-// [핵심 수정] 신형 @google-cloud/vertexai 라이브러리만 사용합니다.
+// [핵심] 2개의 Vertex AI 라이브러리를 모두 사용합니다.
+// 1. 임베딩(벡터화)용 (구형)
+import {
+  PredictionServiceClient,
+  helpers,
+  protos, // [v8 수정] protos 타입을 명시적으로 임포트
+} from "@google-cloud/aiplatform";
+// 2. Gemini 답변 생성용 (신형)
 import {
   VertexAI,
   HarmCategory,
   HarmBlockThreshold,
 } from "@google-cloud/vertexai";
-// [핵심 수정] 구형 @google-cloud/aiplatform 라이브러리 임포트 제거
 
 // 1. Firebase Admin SDK 초기화
 initializeApp();
@@ -39,13 +45,21 @@ function chunkText(
   return chunks;
 }
 
-// --- 3. [수정] 신형 Vertex AI SDK 초기화 ---
+// --- 3. Vertex AI SDK 초기화 (2개 모두) ---
+
+// 3a. 임베딩용 클라이언트 (구형)
+function initEmbeddingClient() {
+  const clientOptions = {
+    apiEndpoint: "us-central1-aiplatform.googleapis.com",
+  };
+  return new PredictionServiceClient(clientOptions);
+}
+
+// 3b. Gemini 답변용 클라이언트 (신형)
 const vertexAI = new VertexAI({
   project: process.env.GCLOUD_PROJECT || "",
   location: "us-central1",
 });
-
-// Gemini 답변용 모델
 const generativeModel = vertexAI.getGenerativeModel({
   model: "gemini-1.5-flash-001",
   safetySettings: [
@@ -55,25 +69,49 @@ const generativeModel = vertexAI.getGenerativeModel({
     },
   ],
 });
-
-// 임베딩(벡터화)용 모델
-const embeddingModel = vertexAI.getGenerativeModel({
-  model: "text-embedding-004",
-});
 // --- 초기화 종료 ---
 
-// 4. Vertex AI Embedding 생성 함수 (신형 SDK로 수정)
+// 4. Vertex AI Embedding 생성 함수 (구형 SDK 방식)
 async function getEmbedding(text: string): Promise<number[]> {
+  const client = initEmbeddingClient();
+  const project = process.env.GCLOUD_PROJECT;
+  const endpoint = `projects/${project}/locations/us-central1/publishers/google/models/text-embedding-004`;
+
+  // [v8 수정] 타입을 명확히 지정
+  const instances: protos.google.protobuf.IValue[] = [
+    helpers.toValue({ content: text }) as protos.google.protobuf.IValue,
+  ];
+  const request: protos.google.cloud.aiplatform.v1.IPredictRequest = {
+    endpoint,
+    instances,
+  };
+
   try {
-    const result = await embeddingModel.embedContent(text);
-    const embedding = result.embedding;
-    if (!embedding || !embedding.values) {
-      throw new Error("Invalid Vertex AI Embedding response structure (v2)");
+    // [v8 수정] 배열 구조화 제거, 직접 response 받기
+    const response = await client.predict(request);
+
+    if (
+      !response[0].predictions ||
+      !response[0].predictions.length ||
+      // [v8 수정] 타입 캐스팅 및 nullish 확인
+      !(response[0].predictions[0] as protos.google.protobuf.IValue)
+        .structValue?.fields?.embeddings
+    ) {
+      throw new Error("Invalid Vertex AI Embedding response structure (v8)");
     }
-    return embedding.values;
+
+    const first = response[0].predictions[0] as protos.google.protobuf.IValue;
+    const embeddingsValue = first.structValue!.fields!.embeddings!;
+
+    const vector =
+      embeddingsValue.structValue?.fields?.values?.listValue?.values?.map(
+        (v) => v.numberValue ?? 0 // [v8 수정] || 0 -> ?? 0
+      ) ?? [];
+
+    return vector;
   } catch (error) {
-    logger.error("Error getting embedding (v2):", error);
-    throw new Error("Failed to get embedding from Vertex AI (v2).");
+    logger.error("Error getting embedding (v8):", error);
+    throw new Error("Failed to get embedding from Vertex AI (v8).");
   }
 }
 
@@ -86,19 +124,16 @@ export const generateEmbeddings = onObjectFinalized(
     minInstances: 1,
   },
   async (event) => {
+    // ... (이 함수 내용은 수정사항 없음) ...
     const { bucket, name: filePath } = event.data;
     if (!filePath || !filePath.endsWith(".pdf")) {
       logger.info(`Not a PDF file, skipping: ${filePath}`);
       return;
     }
     logger.info(`Processing file: ${filePath}`);
-
     try {
-      // --- 1. Storage에서 PDF 파일 다운로드 ---
       const file = getStorage().bucket(bucket).file(filePath);
       const [fileBuffer] = await file.download();
-
-      // --- 2. PDF 텍스트 추출 ---
       const data = await pdf(fileBuffer);
       const pdfText = data.text;
       if (!pdfText) {
@@ -106,22 +141,14 @@ export const generateEmbeddings = onObjectFinalized(
         return;
       }
       logger.info(`PDF text extracted. Length: ${pdfText.length}`);
-
-      // --- 3. 텍스트 분할 (Chunking) ---
       const textChunks = chunkText(pdfText, 1000, 100);
       logger.info(`Text chunked into ${textChunks.length} pieces.`);
-
-      // --- 4. Firestore 일괄 쓰기(Batch) 준비 ---
       const db = getFirestore(process.env.FIRESTORE_DATABASE_ID!);
       const batch = db.batch();
       let vectorCount = 0;
-
       for (const chunk of textChunks) {
-        // --- 5. 각 Chunk를 벡터로 변환 ---
         const embedding = await getEmbedding(chunk);
         vectorCount++;
-
-        // --- 6. Batch에 쓰기 작업 추가 ---
         const docRef = db.collection("knowledgeChunks").doc();
         batch.set(docRef, {
           originalFilePath: filePath,
@@ -130,8 +157,6 @@ export const generateEmbeddings = onObjectFinalized(
           createdAt: FieldValue.serverTimestamp(),
         });
       }
-
-      // --- 7. Firestore에 일괄 커밋 ---
       await batch.commit();
       logger.info(
         `Successfully created ${vectorCount} embeddings and saved to Firestore.`
@@ -165,8 +190,17 @@ async function getGenerativeAnswer(
 
   try {
     const result = await generativeModel.generateContent(prompt);
-    const response = result.response;
-    return response.text();
+    const resp = result.response;
+
+    // [v8 수정] response.text() 대신 직접 파싱
+    const candidates = resp.candidates ?? [];
+    const answer = candidates
+      .flatMap((c) => c.content?.parts ?? [])
+      .map((p: any) => p?.text ?? "")
+      .join("")
+      .trim();
+
+    return answer || "제공된 정보만으로는 답변할 수 없습니다.";
   } catch (error) {
     logger.error("Error getting generative answer:", error);
     throw new Error("Gemini 모델 호출에 실패했습니다.");
@@ -182,9 +216,10 @@ export const askRAG = onCall(
     minInstances: 1,
   },
   async (request) => {
+    // ... (이 함수 내용은 v7과 동일, HttpsError 및 .get() 수정됨) ...
     const question = request.data.question;
     if (typeof question !== "string" || question.trim().length === 0) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "invalid-argument",
         "질문(question)이 필요합니다."
       );
@@ -198,7 +233,8 @@ export const askRAG = onCall(
       logger.info("Question vectorized.");
 
       const chunksCollection = db.collection("knowledgeChunks");
-      const snapshot = await chunksCollection.findNearest(
+
+      const query = chunksCollection.findNearest(
         "embedding",
         queryVector,
         {
@@ -206,6 +242,7 @@ export const askRAG = onCall(
           distanceMeasure: "DOT_PRODUCT",
         }
       );
+      const snapshot = await query.get();
 
       if (snapshot.empty) {
         logger.warn("No relevant chunks found.");
@@ -223,10 +260,10 @@ export const askRAG = onCall(
       return { answer: finalAnswer };
     } catch (error) {
       logger.error("Error in askRAG pipeline:", error);
-      if (error instanceof functions.https.HttpsError) {
+      if (error instanceof HttpsError) {
         throw error;
       }
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "internal",
         "RAG 파이프라인 처리 중 오류가 발생했습니다."
       );

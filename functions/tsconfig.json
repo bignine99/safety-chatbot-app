@@ -1,7 +1,6 @@
 {
   "compilerOptions": {
-    // "module": "NodeNext"가 아닌 "commonjs"를 사용합니다.
-    "module": "NodeNext",
+    "module": "commonjs",
     "esModuleInterop": true,
     "noImplicitReturns": true,
     "noUnusedLocals": true,
@@ -9,14 +8,9 @@
     "sourceMap": true,
     "strict": true,
     "target": "es2017",
-    
-    // [핵심 수정]
-    // "target"인 "es2017" 라이브러리와 함께
-    // Symbol.iterator가 포함된 "es2015" 라이브러리를 추가합니다.
     "lib": ["es2017", "es2015"],
-
     "allowSyntheticDefaultImports": true,
-    "moduleResolution": "NodeNext"
+    "moduleResolution": "node"
   },
   "compileOnSave": true,
   "include": [

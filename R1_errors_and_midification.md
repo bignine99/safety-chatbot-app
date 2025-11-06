@@ -95,6 +95,27 @@ Cloud Functions (TypeScript) 수정 시, cd functions -> npm run build로 수동
 
 npm run dev 실행 시 나오는 경고(Warning)를 절대 무시하지 말아야 합니다. lockfile 경고는 환경 전체가 꼬였다는 가장 강력한 신호입니다.
 
+7. [신규] "유령 캐시" 오진과 코드 구문 오류 (60~70회 수정의 늪)
+우리가 60~70회의 수정을 반복하며 "뱅글 뱅글 도는" 지옥을 경험한 것은, "유령 캐시"나 "모듈 충돌" 때문이 아니었습니다.
+
+**발생 오류:** `embedContent`, `text()`, `[Symbol.iterator]` 오류가 `npm install`, 캐시 삭제, `Reload Window`, `Restart TS server`, `tsconfig.json` 수정, `package.json` 버전 수정 등 **모든 환경 초기화 조치에도 불구하고** 계속 재발했습니다.
+
+**잘못된 진단 (총체적 오진):**
+AI(나)는 이 현상을 "유령 캐시" 또는 "모듈 충돌"로 **완전히 오진**했습니다. 이 잘못된 진단 하에, `ESM`으로 전환(Turn 54), `typescript` 버전 다운그레이드(Turn 58) 및 업그레이드(Turn 60), 라이브러리 병합(Turn 56) 및 분리(Turn 63) 등 **환경 설정만**을 60~70회에 걸쳐 수정하도록 제안하며 "뱅글 뱅글 도는" 혼란을 가중시켰습니다.
+
+**진짜 근본 원인 (3가지 명백한 코드 구문 오류):**
+"유령"은 없었습니다. 문제는 **AI(나)가 제공한 `index.ts` (v1~v7) 코드 자체의 명백한 버그**였습니다.
+
+1.  **`client.predict` 구문 오류:** `const [response] = await client.predict(request)`는 잘못된 구문이었습니다. `predict`는 배열을 반환하지 않으므로 `const response = await client.predict(request)`로 받고 `response[0]`로 접근해야 했습니다. 이 잘못된 구조화 할당이 `[Symbol.iterator]` 오류를 유발했습니다.
+2.  **`response.text()` API 오용:** `vertexai` 라이브러리는 `response.text()`라는 헬퍼를 보장하지 않습니다. `response.candidates[0].content.parts[0].text`로 직접 객체 구조를 파싱하는 것이 올바른 방법이었습니다.
+3.  **`findNearest` 쿼리 누락:** `chunksCollection.findNearest(...)`는 쿼리 객체를 반환할 뿐, `.get()`을 호출해야 실행된다는 것을 (v3~v7 코드에서) 간과했습니다.
+
+**근본 교훈 (가장 뼈아픈 교훈):**
+
+* **환경을 의심하기 전에 코드를 의심하라.** 60~70회의 수정은 환경 문제가 아니라, 명백한 **구문 오류(Syntax Error)**와 **API 오용(API Misuse)**을 "캐시" 탓으로 돌린 **총체적인 오진** 때문이었습니다.
+* **오류 메시지는 정직하다.** `embedContent`나 `text` 속성이 없다는 메시지는 캐시가 아니라 **정말로 그 타입에 해당 속성이 없다**는 뜻이었습니다 (AI가 `aiplatform`과 `vertexai`를 혼용하거나 잘못된 타입 추론을 유도했기 때문에).
+* **해결책은 `v8` 코드에 있다.** 원본 KB의 아키텍처(`aiplatform` + `vertexai` 분리, `commonjs` 사용)를 존중하고, 그 위에 명백한 구문 오류 3가지를 수정한 **`v8` 코드**가 최종 해결책이었습니다.
+
 
 
 
