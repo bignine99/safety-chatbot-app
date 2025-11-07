@@ -1,18 +1,8 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-
-    // 파일 업로드 및 다운로드 규칙
-    // 경로는 {userId}로 파라미터화해야 합니다.
-    match /papers/{userId}/{fileName} { 
-      // [수정] 파일 경로의 {userId}와 요청 사용자의 ID가 일치할 때만 허용
-      // 이것이 사용자가 자신의 파일만 조작하도록 강제하는 보안 규칙입니다.
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-
-    // 그 외 모든 경로는 접근 금지 (기존 규칙 유지)
-    match /{allPaths=**} {
-      allow read, write: if false;
+    match /papers/{allPaths=**} {
+      allow read, write: if request.auth != null;
     }
   }
 }

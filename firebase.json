@@ -1,6 +1,6 @@
 {
   "firestore": {
-    "database": "rag1",
+    "database": "safety-db251106",
     "location": "nam5",
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"

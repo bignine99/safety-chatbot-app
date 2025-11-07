@@ -1,28 +1,33 @@
-// lib/firebase/config.ts (수정본)
-
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getFunctions } from "firebase/functions";
 
-// [핵심 수정] 하드코딩된 Config 객체 대신 환경 변수에서 값을 읽어옵니다.
+// -----------------------------------------------------------------
+// ❗️❗️❗️ 여기가 핵심입니다 ❗️❗️❗️
+// .env.local을 믿지 않고, 실제 값을 "하드코딩"합니다.
+// (image_682b85.png / image_67b3a1.jpg에서 가져온 값)
+// -----------------------------------------------------------------
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_APP_ID,
-  measurementId: process.env.NEXT_PUBLIC_MEASUREMENT_ID
+  apiKey: "AIzaSyC5Bxs3yN4FZ--J3DV-Eudu2Zoi3PBjPy0",
+  authDomain: "safety-chatbot-project.firebaseapp.com",
+  projectId: "safety-chatbot-project",
+  storageBucket: "safety-chatbot-project.firebasestorage.app",
+  messagingSenderId: "712711322235",
+  appId: "1:712711322235:web:f8e9b7dcb238ba956e40de",
+  measurementId: "G-EYYYES0QWV"
 };
+// -----------------------------------------------------------------
 
+// ❗️❗️❗️ [수정됨] 23번째 줄의 주석 '//'을 제거했습니다. ❗️❗️❗️
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-// "rag1" 하드코딩 제거
-export const db = getFirestore(app, process.env.NEXT_PUBLIC_FIRESTORE_DATABASE_ID!);
+// ❗️❗️❗️ [최종 수정] ❗️❗️❗️
+// (default) DB가 아닌, "safety-db251106" DB를 명시적으로 지정합니다.
+export const db = getFirestore(app, "safety-db251106");
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app, "us-central1");
 
-// Analytics 관련 코드는 없는 상태 유지
+export { app, firebaseConfig };

@@ -203,6 +203,129 @@ npm run dev 실행
 http://localhost:3000에 접속하여 src/app/page.tsx 파일 수정을 통해 프론트엔드 개발을 시작한다. AI 백엔드는 이미 백그라운드에서 실행 대기 중이다.
 
 
+======251107==================================
+
+알겠습니다. 오늘 우리가 겪은 16번이 넘는 끔찍한 실패의 여정은, 향후 프로젝트 진행 시 가장 완벽한 가이드가 될 것입니다.
+
+이 내용은 errors_and_modifications.md 파일에 "오늘의 교훈"으로 반드시 추가해야 할, 매우 가치 있는 자산입니다.
+
+다음은 errors_and_modifications.md 파일에 업데이트할 내용입니다.
+
+2025-11-07: 프로젝트 실행 및 인증/배포 실패 대서사시
+git clone으로 템플릿을 복제한 후, npm run dev를 실행하고 업로드 기능을 활성화하기까지 16번이 넘는 실패를 겪었다. 이 기록은 모든 실패의 원인과 해결 과정을 상세히 기술하여, 다시는 동일한 실수를 반복하지 않도록 한다.
+
+1. 프로젝트 실행 오류: genkit start vs npm run dev
+초기 목표는 Next.js 웹 서버와 Genkit AI 서버를 개별적으로 실행하는 것이었으나, 이는 템플릿의 아키텍처를 완전히 오해한 것이었다.
+
+시도 1: genkit start
+
+오류: 'genkit'은(는) 내부 또는 외부 명령...
+
+원인: genkit CLI가 전역 또는 로컬 node_modules/.bin에 설치되어 있지 않았다. npm install genkit로 수동 설치해도 문제는 동일했다.
+
+시도 2: npm start
+
+오류: Error: Could not find a production build...
+
+원인: npm start는 next start를 실행하며, 이는 **프로덕션(배포)**용 명령어다.
+
+시도 3: npm run dev
+
+성공: http://localhost:3000에서 Next.js 기본 페이지가 로드되었다.
+
+시도 4: Genkit UI 접속 (실패)
+
+http://localhost:4000, http://localhost:3000/genkit, http://localhost:3000/api/genkit 모두 404 또는 ERR_CONNECTION_REFUSED를 반환했다.
+
+최종 교훈 (아키텍처 확정):
+
+이 템플릿은 genkit start를 사용하는 별도의 AI 서버가 없다.
+
+npm run dev 명령어 하나가 Next.js 웹 서버와 **Genkit AI 백엔드 로직(API)**을 동시에 실행하는 "통합 서버" 방식이다.
+
+AI 플로우를 테스트하는 별도의 Genkit UI는 존재하지 않으며, 모든 기능은 http://localhost:3000의 웹 UI를 통해서만 테스트해야 한다.
+
+2. 인증 오류: auth/invalid-api-key (10번 이상의 실패)
+http://localhost:3000/admin 페이지 접속 시, Firebase: Error (auth/invalid-api-key) 오류가 10번 이상 반복되었다.
+
+실패 1 (원인 진단): .env.local의 apiKey와 Firebase Console의 apiKey가 다른 것으로 추측했다.
+
+검증: 두 키(...Py0)는 동일했다.
+
+실패 2 (원인 진단): Google Cloud Console에서 ...Py0 키가 "키 제한"으로 설정된 것을 발견했다.
+
+조치: "키 제한 안함"으로 변경하고 저장했다.
+
+실패 3 (캐시 문제): 여전히 invalid-api-key 오류가 발생했다.
+
+조치: rmdir /s /q .next 명령어로 Next.js의 캐시를 삭제하고 서버를 재시작했으나 실패했다.
+
+실패 4 (근본 원인): Next.js가 어떤 이유로든 .env.local 파일 자체를 올바르게 읽지 못하고 있었다. getAuth(app)가 apiKey: undefined로 실행되고 있었다.
+
+최종 교훈 (하드코딩):
+
+.env.local을 신뢰할 수 없을 때, lib/firebase/config.ts 파일에 firebaseConfig 객체를 직접 하드코딩하는 것이 가장 확실한 해결책이다.
+
+process.env.NEXT_PUBLIC_...을 사용하는 모든 코드를 제거하고, 실제 문자열 값으로 대체하여 .env 파일 의존성을 완전히 제거했다.
+
+3. 배포 오류: 잘못된 프로젝트에 배포 (rag1 vs safety-chatbot-project)
+인증 문제가 해결된 후, firebase deploy --only storage,firestore를 실행했을 때 rag1-be5b0라는 엉뚱한 프로젝트에 배포가 시도되었다.
+
+원인: 로컬 CLI가 paper-rag-app 템플릿의 예전 프로젝트(.firebaserc 파일)를 기억하고 있었다.
+
+해결: firebase use safety-chatbot-project 명령어를 실행하여 로컬 CLI의 활성 프로젝트를 올바른 프로젝트로 즉시 전환했다.
+
+최종 교훈:
+
+템플릿을 복제(clone)한 후, 가장 먼저 firebase use [내_프로젝트_ID]를 실행하여 배포 대상을 명확히 지정해야 한다.
+
+4. 업로드 실패: "Uploading... 100%" (16번의 실패)
+인증, Storage 업로드는 성공했으나, Uploading... 100%에서 멈추며 Firestore 쓰기가 실패했다. 이 문제는 세 가지 설정이 모두 틀어진 "3-Way Failure"였다.
+
+증상: papers 컬렉션이 생성되지 않았다. alert 창으로 Missing or insufficient permissions 오류를 확인했다.
+
+실패 A (Code): lib/firebase/config.ts
+
+문제: export const db = getFirestore(app); 코드가 (default) 데이터베이스를 가리켰으나, 우리 프로젝트에는 (default) DB가 없고 rag1과 safety-db251106만 존재했다.
+
+해결: export const db = getFirestore(app, "safety-db251106");로 수정하여, "실존하는" 데이터베이스를 명시적으로 가리키도록 변경했다.
+
+실패 B (Config): firebase.json
+
+문제: 배포 설정 파일이 firestore.rules를 (default) 또는 rag1이라는 "엉뚱한" 데이터베이스에 적용하려 했다.
+
+해결: "database": "(default)"를 "database": "safety-db251106"로 수정하여, "실존하는" 데이터베이스에 규칙이 배포되도록 변경했다.
+
+실패 C (Rules): firestore.rules
+
+문제: allow create: if false; 또는 AI가 생성한 복잡한 match /users/... 규칙으로 인해 papers 컬렉션 쓰기가 차단되었다.
+
+해결: match /papers/{documentId} { allow create: if request.auth != null; } 라는 단순하고 올바른 규칙으로 덮어쓰고 배포했다.
+
+최종 교훈 (RAG 프로젝트의 핵심):
+
+config.ts (클라이언트 코드)가 가리키는 DB ID.
+
+firebase.json (배포 설정)이 가리키는 DB ID.
+
+firestore.rules (보안 규칙)가 허용하는 컬렉션 경로.
+
+이 세 가지가 100% 일치하지 않으면, 인증과 스토리지가 성공해도 Firestore 쓰기는 반드시 실패한다.
+
+5. 기타 오류: admin 폴더 및 패키지 누락
+오류: src/app/admin 폴더가 존재하지 않았다.
+
+해결: app/admin/page.tsx 경로에 "클린 버전"의 업로드 코드를 새로 생성했다.
+
+오류: Module not found: Can't resolve 'react-dropzone'
+
+원인: admin/page.tsx가 의존하는 패키지가 누락되었다.
+
+해결: npm install react-dropzone을 실행하여 설치했다.
+
+오류: shadcn-ui 패키지 이름이 변경됨.
+
+해결: npx shadcn-ui@latest add... 대신 npx shadcn@latest add...를 사용했다.
 
 
 
